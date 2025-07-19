@@ -12,6 +12,7 @@ add bypass_vpn 1.0.32.0/19
 ```
 
 Then 
+```
 sudo ipset restore < bypass_vpn_rules.ipset
 sudo iptables -t mangle -A OUTPUT -m set --match-set bypass_vpn dst -j MARK --set-mark 100
 sudo iptables -t mangle -A PREROUTING -m set --match-set bypass_vpn dst -j MARK --set-mark 100
