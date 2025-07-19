@@ -39,3 +39,11 @@ sudo ip rule add fwmark 100 table bypass_vpn
 sudo apt-get install ipset-persistent
 sudo ipset save bypass_vpn -f /etc/ipset/bypass_vpn.conf
 ```
+
+## To add new IP into the PBR
+use tcpdump to monitor the IPs go to VPN:
+```
+sudo tcpdump tcp -i tun0 -n -q -t -l
+```
+
+then access the domestic website, if there is traffic goes to VPN, then you can write down the IP address, add it into the ipset.
