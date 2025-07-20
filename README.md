@@ -1,49 +1,39 @@
-# vpn_config
-the VPN configurations for breaking FW
+# Purpose
+This project is about my personal home network setup in China mainland, it including the OpenVPN Fanqiang solution, the DNSMASQ+dnscrypt-proxy based DNS solution, Policy based routing and dynamic best route detection (under construction)
 
-## LINUX PBR STEPS
-Make a IP rule file like below:
-```
-create bypass_vpn hash:net family inet hashsize 2048 maxelem 65536
-add bypass_vpn 1.0.1.0/24
-add bypass_vpn 1.0.2.0/23
-add bypass_vpn 1.0.8.0/21
-add bypass_vpn 1.0.32.0/19
-```
+## Pre-requisites
+Prepare below:
+1. A virtual machine out of China for running OpenVPN, you can purchase services from bandwagonhost.com.
 
-Then 
-```
-sudo ipset restore < bypass_vpn_rules.ipset
-# OUTPUT for locally originated packets
-sudo iptables -t mangle -A OUTPUT -m set --match-set bypass_vpn dst -j MARK --set-mark 100
-# PREROUTE for packets originated from other computers
-sudo iptables -t mangle -A PREROUTING -m set --match-set bypass_vpn dst -j MARK --set-mark 100
-```
+2. China intranet access
+You need to contact ISP like China mobile, China telecom for let you access China intranet, and you can access baidu.com, taobao.com, etc.
 
-Edit the route table
-```
-sudo nano /etc/iproute2/rt_tables
-```
-add below:
-```
-200 bypass_vpn
-```
+3. Two Ubuntu based computers 
+You need 2 Ubuntu based computers, it could be old laptops, Raspberry pi or Jetson devices. one of them is the home router, another is for detecting the best route.
+You need to install Ubuntu 18 or newer version on the computers, Python is mandatory.
 
-Add Routes to the Custom Table
+4. A USB to RJ45 network adapter
+In the case your computer has only one network adapter, you need to purchase an USB to RJ45 adapter for your router. it needs 2 network adapters.
 
-sudo ip route add default via 192.168.71.1 table bypass_vpn
-sudo ip rule add fwmark 100 table bypass_vpn
+5. A home WIFI router
+To provide internet access to your iPhone, iPad and Android based mobile phones.
 
- Persisting ipset
-```
-sudo apt-get install ipset-persistent
-sudo ipset save bypass_vpn -f /etc/ipset/bypass_vpn.conf
-```
+6. A 1000M switch
+To provide wired connection to your computers at home.
 
-## To add new IP into the PBR
-use tcpdump to monitor the IPs go to VPN:
-```
-sudo tcpdump tcp -i tun0 -n -q -t -l
-```
 
-then access the domestic website, if there is traffic goes to VPN, then you can write down the IP address, add it into the ipset.
+## Steps
+1. Setup and test OpenVPN
+Check vpn/README.md
+
+2. Setup and test DNS
+Check dns/README.md
+
+3. Setup Policy Based Routing (PBR)
+Check pbr/README.md
+
+4. Setup Dynamic Routing (DR)
+Check dr/README.md
+
+
+
