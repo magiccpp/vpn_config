@@ -1,0 +1,18 @@
+{
+    "database": {
+        "name": "postgres",
+        "user": "postgres",
+        "password": "example",
+        "host": "localhost",
+        "port": 5432
+    },
+    "local_ip": "10.8.0.10",
+    "raw_file_directory": "raw_files",
+    "route_stale_days": 7,
+    "route_test_interval": 3,
+    "route_detector_server": "192.168.71.51:8080",
+    "max_requests_in_parallel": 4,
+    "alternative_gateway": "192.168.71.1",
+    "default_gateway": "10.8.0.1",
+    "waiting_interval": 5
+}
