@@ -1,3 +1,7 @@
-python3 ./dynamic-routing-client3.py --config config.json
-sudo /home/ken/.pyenv/shims/python3 dynamic-routing.py
 
+On server:
+sudo /home/ken/.pyenv/shims/python3 dynamic-routing-server.py
+
+On Client:
+python3 ./dynamic-routing-client.py --config config.json
+sudo /home/ken/.pyenv/shims/python3 update-ip-set.py 
