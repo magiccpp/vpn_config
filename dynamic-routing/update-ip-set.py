@@ -17,7 +17,8 @@ def read_config(config_path):
         print(f"Error reading config file: {e}")
         sys.exit(1)
 
-def manage_ipset_entry(ip: str, set_name: str) -> bool:
+# the action can be add or delete
+def append_to_ipset_entry(ip: str, set_name: str) -> bool:
     """
     Check if an IP exists in an ipset. If it does not, add it.
 
@@ -58,6 +59,49 @@ def manage_ipset_entry(ip: str, set_name: str) -> bool:
         print(f"An unexpected error occurred: {e}")
         return False
 
+
+# the action can be add or delete
+def remove_from_ipset_entry(ip: str, set_name: str) -> bool:
+    """
+    Check if an IP exists in an ipset. If it does not, add it.
+
+    Parameters:
+    - ip (str): The IP address to check/add.
+    - set_name (str): The name of the ipset.
+
+    Returns:
+    - bool: True if the IP exists or was successfully added, False otherwise.
+    """
+    try:
+        # First, check if the IP exists in the ipset
+        check_cmd = ['ipset', 'test', set_name, ip]
+        result = subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if result.returncode != 0:
+            # IP exists in the ipset
+            print(f"IP {ip} does not exists in ipset '{set_name}'.")
+            return True
+        else:
+            # IP does exist, attempt to remove it
+            del_cmd = ['ipset', 'del', set_name, ip]
+            del_result = subprocess.run(del_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            if del_result.returncode == 0:
+                # Successfully added the IP
+                print(f"IP {ip} deleted from ipset '{set_name}'.")
+                return True
+            else:
+                # Failed to remove the IP
+                return False
+    except FileNotFoundError:
+        # ipset command not found
+        print("Error: ipset command not found.")
+        return False
+    except Exception as e:
+        # Handle other unforeseen exceptions
+        print(f"An unexpected error occurred: {e}")
+        return False
+
 def parse_arguments():
     """Parses command line arguments."""
     parser = argparse.ArgumentParser(
@@ -73,6 +117,7 @@ def parse_arguments():
 def main():
     print("Starting the IP set management script...")
     args = parse_arguments()
+    
     if not args.config:
         print("Error: Configuration file path is required.")
         sys.exit(1)
@@ -89,6 +134,8 @@ def main():
     default_gateway = config.get("default_gateway", "10.8.0.1")
     alternative_gateway = config.get("alternative_gateway", "192.168.71.1")
     waiting_interval = config.get("waiting_interval", 5)
+    update_route_threshold = config.get("update_route_threshold", 1.4)
+    route_stale_hours = config.get("route_stale_hours", 72)
 
     # Validate required config parameters
     required_db_keys = ["name", "user", "password"]
@@ -115,41 +162,85 @@ def main():
     # the column default_gateway_rtt is larger than alternative_gateway_rtt and the current_gateway is the default gateway
 
     while True:
-        # Query to get the IPs that need gateway testing
-        print("Checking for IPs that need gateway testing...")
+        # Find out the ip routes that haven't been seen more than route_stale_hours
         cursor = conn.cursor()
         cursor.execute("""
             SELECT ip_address, port, default_gateway_rtt, alternative_gateway_rtt, current_gateway
             FROM ip_route_table WHERE
-            current_gateway = %s
-        """, (default_gateway,))
+            (last_hit_time IS NULL OR last_hit_time < (NOW() - INTERVAL '%s hours'))
+        """, (route_stale_hours,))
+        rows = cursor.fetchall()
+        cursor.close()
+        # in the case the current_gateway is not the default gateway, we must delete it from the ipset
+        if rows:
+            print("IPs that are staled:", len(rows))
+            for row in rows:
+                ip, port, default_rtt, alternative_rtt, current_gateway = row
+                if current_gateway != default_gateway:
+                    # delete the IP set if it is in the ipset
+                    if remove_from_ipset_entry(ip, "bypass_vpn"):
+                        print(f"IP {ip} removed from ipset 'bypass_vpn'.")
+
+                # delete the row from the database
+                cursor.execute("""
+                    DELETE FROM ip_route_table WHERE ip_address = %s
+                """, (ip,))
+                conn.commit()
+                print(f"Database updated for IP {ip}, removed from ipset 'bypass_vpn'.")
+                    
+        # Query to get the IPs that need gateway testing
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ip_address, port, default_gateway_rtt, alternative_gateway_rtt, current_gateway
+            FROM ip_route_table WHERE
+            last_hit_time > (NOW() - INTERVAL '%s hours') ORDER BY last_hit_time DESC
+        """, (route_stale_hours,))
 
         # get the first row
         rows = cursor.fetchall()
 
         # for each row, try to add the ip to the ipset 'bypass_vpn'
         if rows:
-            print("IPs that need gateway testing:")
             for row in rows:
                 ip, port, default_rtt, alternative_rtt, current_gateway = row
                 # Check if the default RTT is larger than the alternative RTT more than 20%
                 if not default_rtt:
                     default_rtt = 10000
-                if alternative_rtt and default_rtt >= alternative_rtt * 1.2:
-                    print(f"Set IPSET: IP: {ip}, Port: {port}, Default RTT: {default_rtt}, Alternative RTT: {alternative_rtt}, Current Gateway: {current_gateway}")
-                    # Here you would typically call a function to add the IP to the ipset
-                    if manage_ipset_entry(ip, "bypass_vpn"):
-                        
-                        # update the database to set the column current_gateway to the alternative gateway
-                        cursor.execute("""
-                            UPDATE ip_route_table
-                            SET current_gateway = %s
-                            WHERE ip_address = %s
-                        """, (alternative_gateway, ip))
-                        conn.commit()
-                        print(f"Datebase updated for IP {ip}")
-                    else:
-                        print(f"Failed to add IP {ip} to ipset 'bypass_vpn'.") 
+
+                if not alternative_rtt:
+                    alternative_rtt = 10000
+
+                if alternative_rtt and default_rtt >= alternative_rtt * update_route_threshold:
+                    if current_gateway == default_gateway:
+
+                        #print(f"Set IPSET: IP: {ip}, Port: {port}, Default RTT: {default_rtt}, Alternative RTT: {alternative_rtt}, Current Gateway: {current_gateway}")
+                        # Here you would typically call a function to add the IP to the ipset
+                        if append_to_ipset_entry(ip, "bypass_vpn"):
+                            # update the database to set the column current_gateway to the alternative gateway
+                            cursor.execute("""
+                                UPDATE ip_route_table
+                                SET current_gateway = %s
+                                WHERE ip_address = %s
+                            """, (alternative_gateway, ip))
+                            conn.commit()
+                            print(f"IP {ip} is appended into ipset.")
+                        else:
+                            print(f"Failed to add IP {ip} to ipset 'bypass_vpn'.")
+                else: # should back to default gateway
+                    if current_gateway != default_gateway:
+                        # delete the IP set if it is in the ipset
+                        if remove_from_ipset_entry(ip, "bypass_vpn"):
+                            print(f"IP {ip} removed from ipset.")
+
+                        # update the database to set the column current_gateway to the default gateway
+                            cursor.execute("""
+                                UPDATE ip_route_table
+                                SET current_gateway = %s
+                                WHERE ip_address = %s
+                            """, (default_gateway, ip))
+                            conn.commit()
+                        #print(f"IP {ip} back to default gateway, removed from ipset 'bypass_vpn'.")
+
 
 
         else:
@@ -157,7 +248,6 @@ def main():
 
         cursor.close()
         # to sleep few seconds before the next iteration
-        print(f"Waiting for {waiting_interval} seconds before the next iteration...")
         time.sleep(waiting_interval)
 
 

@@ -3,5 +3,6 @@ On server:
 sudo /home/ken/.pyenv/shims/python3 dynamic-routing-server.py
 
 On Client:
+sudo tcpdump tcp -i tun0 -n -q -t -l -C 1 -s 100 -G 60  -w raw_files/test-%Y%m%d-%H%M%S.pcap
 python3 ./dynamic-routing-client.py --config config.json
-sudo /home/ken/.pyenv/shims/python3 update-ip-set.py 
+sudo /home/ken/.pyenv/shims/python3 update-ip-set.py --config config.json 

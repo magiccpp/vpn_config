@@ -131,32 +131,21 @@ def insert_or_update_ips(conn, ip_port_set, local_ip, default_gateway):
         return False
     return True
 
-def cleanup_stale_routes(conn, route_stale_days):
-    """Deletes routes older than route_stale_days."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                DELETE FROM IP_ROUTE_TABLE
-                WHERE last_hit_time < now() - interval '%s days'
-            """, (route_stale_days,))
-        deleted = cur.rowcount
-        conn.commit()
-        print(f"Cleaned up {deleted} stale routes from the database.")
-    except psycopg2.Error as e:
-        print(f"Error cleaning up stale routes: {e}")
-        return False
-    return True
 
 
-def select_ips_to_test(conn, route_test_interval):
+
+def select_ips_to_test(conn, test_result_stale_hours):
     """Selects IPs that need gateway testing."""
     try:
         with conn.cursor() as cur:
             query = f"""
-                SELECT ip_address, port FROM IP_ROUTE_TABLE WHERE 
-                   last_test_time IS NULL OR  
-                   last_test_time < now() - interval '{route_test_interval} days'
-            """
+            SELECT ip_address, port FROM IP_ROUTE_TABLE 
+            WHERE 
+                last_hit_time > (NOW() - INTERVAL '1 hour') AND 
+                (last_test_time IS NULL OR 
+                 last_hit_time - last_test_time > INTERVAL '{test_result_stale_hours} hours')
+            ORDER BY last_hit_time DESC
+        """
             cur.execute(query)
             results = cur.fetchall()
             return results
@@ -212,7 +201,6 @@ async def process_single_ip(session, semaphore, url, conn, ip, port, default_gat
         response = await test_gateway(session, url, ip, port, default_gateway, [alternative_gateway])
         if response and "results" in response:
             results = response["results"]
-            current_rtt = None
             alternative_rtt = None
 
             for result in results:
@@ -245,13 +233,9 @@ async def process_single_ip(session, semaphore, url, conn, ip, port, default_gat
             print(f"No valid response for {ip}:{port}. Skipping RTT update.")
 
 
-
-
-
 def process_ips_to_test(conn, ips_to_test, config):
     """Processes IPs that need gateway testing."""
     if not ips_to_test:
-        print("No IPs need gateway testing.")
         return
 
     print(f"Testing gateways for {len(ips_to_test)} IPs.")
@@ -267,7 +251,6 @@ def main():
     db_config = config.get("database", {})
     raw_file_dir = config.get("raw_file_directory")
     local_ip = config.get("local_ip")
-    route_stale_days = config.get("route_stale_days", 7)
     route_test_interval = config.get("route_test_interval", 3)
     default_gateway = config.get("default_gateway", "10.8.0.1")
     waiting_interval = config.get("waiting_interval", 5)
@@ -298,9 +281,6 @@ def main():
         sys.exit(1)
 
     while True:
-        # Cleanup stale routes
-        cleanup_stale_routes(conn, route_stale_days)
-
         # Process pcap files
         pcap_files = sorted(glob.glob(os.path.join(raw_file_dir, "*.pcap*")))  # Sort for processing order
 
@@ -327,24 +307,13 @@ def main():
             print(f"deleting {filepath}")
             os.remove(filepath)
 
-
-            # Optional: Move or delete the processed pcap file
-            # Be careful not to delete files still being written by tcpdump
-            # Example: Move to archive directory
-            # archive_dir = os.path.join(raw_file_dir, "archive")
-            # os.makedirs(archive_dir, exist_ok=True)
-            # os.rename(filepath, os.path.join(archive_dir, os.path.basename(filepath)))
-
         # Select and process IPs that need gateway testing
         ips_to_test = select_ips_to_test(conn, route_test_interval)
         if ips_to_test:
             print(f"Testing gateways for {len(ips_to_test)} IPs.")
             process_ips_to_test(conn, ips_to_test, config)
-        else:
-            print("No IPs need gateway testing.")
 
         # to sleep few seconds before the next iteration
-        print(f"Waiting for {waiting_interval} seconds before the next iteration...")
         time.sleep(waiting_interval)
         
 
