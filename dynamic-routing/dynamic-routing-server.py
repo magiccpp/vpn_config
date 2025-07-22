@@ -56,12 +56,12 @@ async def measure_tcp_rtt(dest_ip: str, dest_port: int, timeout: float = 2.0) ->
     """
     start_time = time.time()
     reader = writer = None
+    
     try:
-        if dest_port == "443":
+        if dest_port == 443:
             # Create an SSL context
             ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+            
             # Initiate the SSL connection
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(dest_ip, dest_port, ssl=ssl_context),
@@ -118,10 +118,11 @@ async def test_gateway(destination: str, port: int, gateway: str, num_tests: int
     }
     try:
         # Add route
-        add_res = await add_route(destination, gateway)
-        if add_res["returncode"] != 0:
-            result["errors"].append(f"Failed to add route: {add_res['stderr']}")
-            return result
+        async with route_lock:
+            add_res = await add_route(destination, gateway)
+            if add_res["returncode"] != 0:
+                result["errors"].append(f"Failed to add route: {add_res['stderr']}")
+                return result
 
         # Wait for route to take effect
         await asyncio.sleep(1)
@@ -156,10 +157,11 @@ async def test_gateway(destination: str, port: int, gateway: str, num_tests: int
         result["errors"].append(str(e))
     finally:
         # Remove the added route
-        del_res = await del_route(destination)
-        if del_res["returncode"] != 0:
-            # Log the error; in a real application, consider proper logging
-            result["errors"].append(f"Failed to delete route: {del_res['stderr']}")
+        async with route_lock:
+            del_res = await del_route(destination)
+            if del_res["returncode"] != 0:
+                # Log the error; in a real application, consider proper logging
+                result["errors"].append(f"Failed to delete route: {del_res['stderr']}")
 
     return result
 
@@ -197,62 +199,62 @@ async def handle_test_route(request: web.Request) -> web.Response:
         return web.json_response({"error": "num_tests_per_gateway must be a positive integer."}, status=400)
 
     # Acquire the route lock to prevent concurrent modifications
-    async with route_lock:
-        results = []
+    
+    results = []
 
-        # Step 1: Remove existing route if it exists
-        del_res = await del_route(destination_ip)
-        if del_res["returncode"] != 0 and "No such process" not in del_res["stderr"] and "No such file" not in del_res["stderr"]:
-            # "No such process" or "No route" is expected if the route doesn't exist
-            results.append({
-                "gateway": None,
-                "rtt_stats_ms": None,
-                "errors": [f"Failed to delete existing route: {del_res['stderr']}"]
-            })
+    # Step 1: Remove existing route if it exists
+    del_res = await del_route(destination_ip)
+    if del_res["returncode"] != 0 and "No such process" not in del_res["stderr"] and "No such file" not in del_res["stderr"]:
+        # "No such process" or "No route" is expected if the route doesn't exist
+        results.append({
+            "gateway": None,
+            "rtt_stats_ms": None,
+            "errors": [f"Failed to delete existing route: {del_res['stderr']}"]
+        })
 
-        # Function to process a single gateway
-        async def process_gateway(gateway: str) -> Dict[str, Any]:
-            return await test_gateway(destination_ip, destination_port, gateway, num_tests=num_tests)
+    # Function to process a single gateway
+    async def process_gateway(gateway: str) -> Dict[str, Any]:
+        return await test_gateway(destination_ip, destination_port, gateway, num_tests=num_tests)
 
-        # Step 2-5: Test current gateway
-        current_result = await process_gateway(current_gateway)
-        results.append(current_result)
+    # Step 2-5: Test current gateway
+    current_result = await process_gateway(current_gateway)
+    results.append(current_result)
 
-        # Step 6: Test alternative gateways concurrently with timeout
-        tasks = []
-        for alt_gw in alternative_gateways:
-            task = asyncio.create_task(process_gateway(alt_gw))
-            tasks.append(task)
+    # Step 6: Test alternative gateways concurrently with timeout
+    tasks = []
+    for alt_gw in alternative_gateways:
+        task = asyncio.create_task(process_gateway(alt_gw))
+        tasks.append(task)
 
-        # Define a total timeout for all gateways
-        overall_timeout = 30  # seconds
-        try:
-            alternative_results = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=overall_timeout
-            )
-            # Handle results and any exceptions
-            for idx, res in enumerate(alternative_results):
-                if isinstance(res, Exception):
-                    results.append({
-                        "gateway": alternative_gateways[idx],
-                        "rtt_stats_ms": None,
-                        "errors": [str(res)]
-                    })
-                else:
-                    results.append(res)
-        except asyncio.TimeoutError:
-            # Handle gateways that did not respond in time
-            for task_num, task in enumerate(tasks, 1):
-                if not task.done():
-                    task.cancel()
-                    results.append({
-                        "gateway": alternative_gateways[task_num - 1],
-                        "rtt_stats_ms": None,
-                        "errors": ["Operation timed out."]
-                    })
+    # Define a total timeout for all gateways
+    overall_timeout = 30  # seconds
+    try:
+        alternative_results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=overall_timeout
+        )
+        # Handle results and any exceptions
+        for idx, res in enumerate(alternative_results):
+            if isinstance(res, Exception):
+                results.append({
+                    "gateway": alternative_gateways[idx],
+                    "rtt_stats_ms": None,
+                    "errors": [str(res)]
+                })
+            else:
+                results.append(res)
+    except asyncio.TimeoutError:
+        # Handle gateways that did not respond in time
+        for task_num, task in enumerate(tasks, 1):
+            if not task.done():
+                task.cancel()
+                results.append({
+                    "gateway": alternative_gateways[task_num - 1],
+                    "rtt_stats_ms": None,
+                    "errors": ["Operation timed out."]
+                })
 
-        return web.json_response({"results": results})
+    return web.json_response({"results": results})
 
 async def init_app() -> web.Application:
     app = web.Application()
