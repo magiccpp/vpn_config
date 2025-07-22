@@ -48,21 +48,57 @@ async def del_route(destination: str) -> Dict[str, Any]:
 async def measure_tcp_rtt(dest_ip: str, dest_port: int, timeout: float = 2.0) -> Optional[float]:
     """
     Measure the TCP RTT by attempting to establish a connection.
+    For port 443, ensure that data is transferred by performing an SSL handshake
+    and sending an HTTP HEAD request.
+    
     Returns RTT in milliseconds or None if failed.
     """
     start_time = time.time()
+    reader = writer = None
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(dest_ip, dest_port),
-            timeout=timeout
-        )
+        if dest_port == 443:
+            # Create an SSL context
+            ssl_context = ssl.create_default_context()
+            
+            # Initiate the SSL connection
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(dest_ip, dest_port, ssl=ssl_context),
+                timeout=timeout
+            )
+            
+            # Send a simple HTTP HEAD request
+            http_request = f"HEAD / HTTP/1.0\r\nHost: {dest_ip}\r\n\r\n"
+            writer.write(http_request.encode('utf-8'))
+            await asyncio.wait_for(writer.drain(), timeout=timeout)
+            
+            # Wait for the response
+            response = await asyncio.wait_for(reader.readline(), timeout=timeout)
+            
+            if not response:
+                # No data received
+                raise ConnectionError("No data received after sending HTTP HEAD request.")
+            
+        else:
+            # For other ports, just establish a TCP connection
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(dest_ip, dest_port),
+                timeout=timeout
+            )
+        
         end_time = time.time()
-        writer.close()
-        await writer.wait_closed()
         rtt = (end_time - start_time) * 1000  # Convert to milliseconds
         return rtt
-    except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+
+    except (asyncio.TimeoutError, ConnectionRefusedError, OSError, ssl.SSLError, ConnectionError) as e:
+        print(f"Error measuring RTT to {dest_ip}:{dest_port} - {e}")
         return None
+    finally:
+        if writer:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
 
 async def test_gateway(destination: str, port: int, gateway: str, num_tests: int = 5) -> Dict[str, Any]:
     """
