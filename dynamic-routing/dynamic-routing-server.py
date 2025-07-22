@@ -58,9 +58,13 @@ async def measure_tcp_rtt(dest_ip: str, dest_port: int, timeout: float = 2.0) ->
     reader = writer = None
     
     try:
-        if dest_port == 443:
+        if dest_port == "443":
             # Create an SSL context
             ssl_context = ssl.create_default_context()
+            # ignore ssl verify
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
             
             # Initiate the SSL connection
             reader, writer = await asyncio.wait_for(
