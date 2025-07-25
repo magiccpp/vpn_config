@@ -170,7 +170,6 @@ def main():
             (last_hit_time IS NULL OR last_hit_time < (NOW() - INTERVAL '%s hours'))
         """, (route_stale_hours,))
         rows = cursor.fetchall()
-        cursor.close()
         # in the case the current_gateway is not the default gateway, we must delete it from the ipset
         if rows:
             print("IPs that are staled:", len(rows))
