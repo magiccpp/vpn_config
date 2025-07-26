@@ -10,6 +10,26 @@ import psycopg2
 import asyncio
 import aiohttp
 from scapy.all import rdpcap, IP
+from prometheus_client import Counter, start_http_server
+
+# Define Prometheus metrics
+gateway_received_bytes_total = Counter(
+    'dynamic_routing_gateway_received_bytes_total',
+    'Total received bytes per device (source IP)',
+    ['device']
+)
+
+gateway_transmitted_bytes_total = Counter(
+    'dynamic_routing_gateway_transmitted_bytes_total',
+    'Total transmitted bytes per device (destination IP)',
+    ['device']
+)
+
+tested_IP_total = Counter(
+    'dynamic_routing_tested_IP_total',
+    'Total number of IPs tested'
+)
+
 
 def parse_arguments():
     """Parses command line arguments."""
@@ -49,15 +69,33 @@ def is_file_being_written(filepath):
         sys.exit(1)  # or return False, depending on desired behavior
 
 
-def extract_unique_ip_ports(filepath):
+def extract_unique_ip_ports(filepath, local_ips):
     """Extracts unique IP addresses and their associated ports from a pcap file using scapy."""
+    # check if the file name started with tun, which is the VPN
     unique_ip_ports = set()
+    print("local_ips:", local_ips)
     try:
         packets = rdpcap(filepath)
         for packet in packets:
             if IP in packet:
                 src_ip = packet[IP].src
                 dst_ip = packet[IP].dst
+                src_port = packet[IP].sport if hasattr(packet[IP], 'sport') else None
+                dst_port = packet[IP].dport if hasattr(packet[IP], 'dport') else None
+                
+                # Accurate packet length from IP layer
+                try:
+                    bytes_len = packet[IP].len  # Original packet length from pcap record
+                except AttributeError:
+                    print(f"Warning: Packet in {filepath} missing 'len' field in IP layer. Using captured length instead.")
+                    bytes_len = len(packet)
+
+                # get the device name from the first part of file name before '-'
+                device_name = os.path.basename(filepath).split('-')[0]
+                if dst_ip in  local_ips:
+                    gateway_received_bytes_total.labels(device=device_name).inc(bytes_len)
+                elif src_ip in local_ips:
+                    gateway_transmitted_bytes_total.labels(device=device_name).inc(bytes_len)
 
                 # Extract ports if TCP or UDP layers are present
                 if packet.haslayer('TCP'):
@@ -103,12 +141,12 @@ def create_ip_route_table(conn):
         return False
     return True
 
-def insert_or_update_ips(conn, ip_port_set, local_ip, default_gateway):
+def insert_or_update_ips(conn, ip_port_set, local_ips, default_gateway):
     """Inserts or updates IP addresses and their ports in the database, excluding the local IP."""
     try:
         with conn.cursor() as cur:
             for ip, port in ip_port_set:
-                if ip == local_ip:
+                if ip in local_ips:
                     continue  # Skip the local IP
 
                 try:
@@ -250,10 +288,16 @@ def main():
     # Extract config parameters
     db_config = config.get("database", {})
     raw_file_dir = config.get("raw_file_directory")
-    local_ip = config.get("local_ip")
+    local_ips = config.get("local_ips")
     route_test_interval = config.get("route_test_interval", 3)
     default_gateway = config.get("default_gateway", "10.8.0.1")
     waiting_interval = config.get("waiting_interval", 5)
+    metrics_listen_port = config.get("metrics_listen_port", 8100)
+
+    # Start Prometheus metrics server
+    start_http_server(metrics_listen_port)
+    print(f"Prometheus metrics available at http://localhost:{metrics_listen_port}/metrics")
+
 
     # Validate required config parameters
     required_db_keys = ["name", "user", "password"]
@@ -297,11 +341,10 @@ def main():
 
 
             print(f"Processing {filepath}")
-            ip_port_set = extract_unique_ip_ports(filepath)
+            ip_port_set = extract_unique_ip_ports(filepath, local_ips)
 
             if ip_port_set:
-                insert_or_update_ips(conn, ip_port_set, local_ip, default_gateway)
-
+                insert_or_update_ips(conn, ip_port_set, local_ips, default_gateway)
 
             # remove the file
             print(f"deleting {filepath}")
