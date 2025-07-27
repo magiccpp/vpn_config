@@ -41,8 +41,41 @@ services:
       - '--config.path=/etc/process-exporter.yml'
       - '--procfs=/host/proc'  # Crucial: Specify the procfs path
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  dynamic-routing-client:
+    build: ./dynamic-routing
+    image: dynamic-routing-client:v0.0.1
+    container_name: dynamic-routing-client
+    restart: unless-stopped
+    volumes:
+      - ./dynamic-routing/raw_files:/app/raw_files
+    depends_on:
+      - db
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin  # Set admin password
 
 volumes:
+  prometheus_data:
+  grafana_data:
+
   pgdata:
 
 

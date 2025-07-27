@@ -73,7 +73,6 @@ def extract_unique_ip_ports(filepath, local_ips):
     """Extracts unique IP addresses and their associated ports from a pcap file using scapy."""
     # check if the file name started with tun, which is the VPN
     unique_ip_ports = set()
-    print("local_ips:", local_ips)
     try:
         packets = rdpcap(filepath)
         for packet in packets:

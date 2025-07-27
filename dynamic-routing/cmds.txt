@@ -3,7 +3,11 @@ On server:
 sudo /home/ken/.pyenv/shims/python3 dynamic-routing-server.py
 
 On Client:
-sudo tcpdump tcp -i tun0 -n -q -l -C 1 -s 100 -G 60  -w raw_files/tun0-%Y%m%d-%H%M%S.pcap
+sudo nmcli con modify "Wired connection 1" ipv4.dns "127.0.0.1"
+
+sudo tcpdump tcp -i tun0 -n -q -l -C 1 -s 100 -G 60  -w raw_files/tun0-%Y%m%d-%H%M%S.pcap && \
 sudo tcpdump -i eth0 not port 1395 -n -q -l -C 1 -s 100 -G 60  -w raw_files/eth0-%Y%m%d-%H%M%S.pcap
+
+
 python3 ./dynamic-routing-client.py --config config.json
 sudo /home/ken/.pyenv/shims/python3 update-ip-set.py --config config.json 

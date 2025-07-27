@@ -1,6 +1,9 @@
 # Purpose
 This project is about my personal home network setup in China mainland, it including the OpenVPN Fanqiang solution, the DNSMASQ+dnscrypt-proxy based DNS solution, Policy based routing and dynamic best route detection (under construction)
 
+## System Overview
+https://drive.google.com/file/d/1FD7U2696IMrDkZZQ3uyJyUzsixar7rqv/view?usp=sharing
+
 ## Pre-requisites
 Prepare below:
 1. A virtual machine out of China for running OpenVPN, you can purchase services from bandwagonhost.com.
