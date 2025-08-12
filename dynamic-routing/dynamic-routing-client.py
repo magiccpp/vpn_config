@@ -180,7 +180,8 @@ def select_ips_to_test(conn, test_result_stale_hours):
             WHERE 
                 last_hit_time > (NOW() - INTERVAL '1 hour') AND 
                 (last_test_time IS NULL OR 
-                 last_hit_time - last_test_time > INTERVAL '{test_result_stale_hours} hours')
+                 last_hit_time - last_test_time > INTERVAL '{test_result_stale_hours} hours' OR
+                 default_gateway_rtt IS NULL)
             ORDER BY last_hit_time DESC
         """
             cur.execute(query)
