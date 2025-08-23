@@ -56,6 +56,8 @@ services:
     image: dynamic-routing-client:v0.0.1
     container_name: dynamic-routing-client
     restart: unless-stopped
+    ports:
+      - "8100:8100"
     volumes:
       - ./dynamic-routing/raw_files:/app/raw_files
     depends_on:

@@ -5,12 +5,19 @@ sudo /home/ken/.pyenv/shims/python3 dynamic-routing-server.py
 On Client:
 # add below as permanent route for the DNS.
 sudo nmcli connection modify eth0 +ipv4.routes "116.228.111.118/32 192.168.71.1"
+# A VPN server
+sudo nmcli connection modify eth0 +ipv4.routes "116.228.81.90/32 192.168.71.1"
+nmcli connection show eth0 | grep ipv4.routes
+
+
 
 sudo nmcli con modify "Wired connection 1" ipv4.dns "127.0.0.1"
 
 sudo tcpdump tcp -i tun0 -n -q -l -C 1 -s 100 -G 60  -w raw_files/tun0-%Y%m%d-%H%M%S.pcap && \
 sudo tcpdump -i eth0 not port 1395 -n -q -l -C 1 -s 100 -G 60  -w raw_files/eth0-%Y%m%d-%H%M%S.pcap
 
+# this is important: vpn address
+sudo ip r add 116.228.81.90 via 192.168.71.1
 
 python3 ./dynamic-routing-client.py --config config.json
 sudo /home/ken/.pyenv/shims/python3 update-ip-set.py --config config.json 

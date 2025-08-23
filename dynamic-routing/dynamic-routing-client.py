@@ -89,6 +89,11 @@ def extract_unique_ip_ports(filepath, local_ips):
                     print(f"Warning: Packet in {filepath} missing 'len' field in IP layer. Using captured length instead.")
                     bytes_len = len(packet)
 
+                
+                # if both src and dst IP are in the 10.8.x.x or 192.168.x.x, ignore it
+                if (src_ip.startswith("10.8.") or src_ip.startswith("192.168.")) and (dst_ip.startswith("10.8.") or dst_ip.startswith("192.168.")):
+                    continue
+
                 # get the device name from the first part of file name before '-'
                 device_name = os.path.basename(filepath).split('-')[0]
                 if dst_ip in  local_ips:
