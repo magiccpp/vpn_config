@@ -1,9 +1,10 @@
 import argparse
+from collections import defaultdict
 import glob
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import json
 import psycopg2
@@ -69,10 +70,11 @@ def is_file_being_written(filepath):
         sys.exit(1)  # or return False, depending on desired behavior
 
 
-def extract_unique_ip_ports(filepath, local_ips):
+def extract_unique_ip_ports_with_time(filepath, local_ips):
     """Extracts unique IP addresses and their associated ports from a pcap file using scapy."""
     # check if the file name started with tun, which is the VPN
-    unique_ip_ports = set()
+    ip_port_to_times = defaultdict(set) 
+    
     try:
         packets = rdpcap(filepath)
         for packet in packets:
@@ -105,19 +107,19 @@ def extract_unique_ip_ports(filepath, local_ips):
                 if packet.haslayer('TCP'):
                     src_port = packet['TCP'].sport
                     dst_port = packet['TCP'].dport
-                    unique_ip_ports.add((src_ip, src_port))
-                    unique_ip_ports.add((dst_ip, dst_port))
+                    ip_port_to_times[(src_ip, src_port)].add(float(packet.time))
+                    ip_port_to_times[(dst_ip, dst_port)].add(float(packet.time))
                 elif packet.haslayer('UDP'):
                     src_port = packet['UDP'].sport
                     dst_port = packet['UDP'].dport
-                    unique_ip_ports.add((src_ip, src_port))
-                    unique_ip_ports.add((dst_ip, dst_port))
+                    ip_port_to_times[(src_ip, src_port)].add(float(packet.time))
+                    ip_port_to_times[(dst_ip, dst_port)].add(float(packet.time))
                 else:
                     # Non-TCP/UDP packets do not have ports; skip them
                     continue
     except Exception as e:
         print(f"Error processing {filepath}: {e}")
-    return unique_ip_ports
+    return {k: sorted(v) for k, v in ip_port_to_times.items()}
 
 
 def create_ip_route_table(conn):
@@ -145,34 +147,76 @@ def create_ip_route_table(conn):
         return False
     return True
 
-def insert_or_update_ips(conn, ip_port_set, local_ips, default_gateway):
+def insert_or_update_ips(conn, ip_port_to_times, local_ips, default_gateway):
     """Inserts or updates IP addresses and their ports in the database, excluding the local IP."""
     try:
         with conn.cursor() as cur:
-            for ip, port in ip_port_set:
+            for (ip, port), timestamps in ip_port_to_times.items():
                 if ip in local_ips:
                     continue  # Skip the local IP
 
+                # get the maximum timestamp from timestamps
+                max_timestamp = max(timestamps)
                 try:
                     cur.execute("""
                         INSERT INTO IP_ROUTE_TABLE (ip_address, port, current_gateway, default_gateway, last_hit_time)
-                        VALUES (%s, %s, %s,%s, now())
+                        VALUES (%s, %s, %s,%s, to_timestamp(%s))
                         ON CONFLICT (ip_address) 
                             DO UPDATE SET 
                                 port = EXCLUDED.port,
-                                last_hit_time = now();
-                    """, (ip, port,default_gateway, default_gateway))
+                                last_hit_time = GREATEST(IP_ROUTE_TABLE.last_hit_time, EXCLUDED.last_hit_time);
+                    """, (ip, port, default_gateway, default_gateway, max_timestamp))
                 except psycopg2.errors.InvalidTextRepresentation as e:
                     print(f"Skipping invalid IP address or port: {ip}:{port} due to: {e}")
                     continue
 
         conn.commit()
-        print(f"Inserted/Updated {len(ip_port_set)} IP:Port pairs in the database.")
+        print(f"Inserted/Updated {len(ip_port_to_times)} IP:Port pairs in the database.")
     except psycopg2.Error as e:
         print(f"Error inserting/updating IPs and ports in the database: {e}")
         return False
     return True
 
+
+def select_ips_to_test(conn, test_result_stale_hours):
+    """Selects IPs that need gateway testing."""
+    try:
+        with conn.cursor() as cur:
+            query = f"""
+            SELECT ip_address, port FROM IP_ROUTE_TABLE 
+            WHERE 
+                last_hit_time > (NOW() - INTERVAL '1 hour') AND 
+                (last_test_time IS NULL OR 
+                 last_hit_time - last_test_time > INTERVAL '{test_result_stale_hours} hours' OR
+                 default_gateway_rtt IS NULL)
+            ORDER BY last_hit_time DESC
+        """
+            cur.execute(query)
+            results = cur.fetchall()
+            return results
+    except psycopg2.Error as e:
+        print(f"Error selecting IPs to test: {e}")
+        return []
+
+
+async def process_ips_async(conn, ips_to_test, config):
+    """Processes IPs that need gateway testing asynchronously."""
+    route_detector_server = config.get("route_detector_server", "192.168.71.51:8080")
+    max_parallel = config.get("max_requests_in_parallel", 4)
+    alternative_gateway = config.get("alternative_gateway", "192.168.71.1")
+    default_gateway = config.get("default_gateway", "10.8.0.1")
+
+    url = f"http://{route_detector_server}/test_route"
+
+    # Semaphore to limit the number of concurrent requests
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for ip, port in ips_to_test:
+            task = asyncio.create_task(process_single_ip(session, semaphore, url, conn, ip, port, default_gateway, alternative_gateway))
+            tasks.append(task)
+        await asyncio.gather(*tasks)
 
 
 
@@ -346,10 +390,10 @@ def main():
 
 
             print(f"Processing {filepath}")
-            ip_port_set = extract_unique_ip_ports(filepath, local_ips)
+            ip_port_to_times = extract_unique_ip_ports_with_time(filepath, local_ips)
 
-            if ip_port_set:
-                insert_or_update_ips(conn, ip_port_set, local_ips, default_gateway)
+            if ip_port_to_times:
+                insert_or_update_ips(conn, ip_port_to_times, local_ips, default_gateway)
 
             # remove the file
             print(f"deleting {filepath}")
