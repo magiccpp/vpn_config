@@ -1,6 +1,9 @@
 # vpn_config
 the VPN configurations for breaking FW
 
+## Useful commands
+sudo systemctl restart openvpn-server@server
+
 ## LINUX PBR STEPS
 Make a IP rule file like below:
 ```
